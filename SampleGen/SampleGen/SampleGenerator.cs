@@ -1,8 +1,12 @@
+using System.Diagnostics;
+
 namespace SampleGen;
 
 public class SampleGenerator
 {
     public static string SamplePath = Path.Combine(AppContext.BaseDirectory, "Samples");
+
+    private static Stopwatch timer = new();
     
     public static void Initialize(string[] args)
     {
@@ -22,11 +26,41 @@ public class SampleGenerator
 
     public static void Run()
     {
-        var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, 16384,
+        timer.Restart();
+
+        //int amount = 16384;
+        int amount = 256;
+        
+        var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, amount,
             10f, 0.006f, true);
+        
+        timer.Stop();
+        
+        Debug.Log($"Finished generation! Elapsed: {timer.ElapsedMilliseconds}ms");
 
         string timestamp = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
         SaveSample(sample, Path.Combine(SamplePath, $"{sample.Type}-{sample.LengthSeconds}-{timestamp}"));
+    }
+
+    public Sample GenerateOctaveSample(
+        SampleType type,
+        float frequency,
+        int octaves,
+        int sampleRate,
+        int amount,
+        float lengthSeconds,
+        float detune,
+        bool randomDetuneDistro = false)
+    {
+        Sample sample = new Sample();
+
+        for (int i = 0; i < octaves; i++)
+        {
+            var outputSample = GenerateSample(SampleType.Saw, frequency, sampleRate, amount,
+                lengthSeconds, detune, randomDetuneDistro);
+        }
+        
+        return sample;
     }
     
     // Returns left and right channel samples
@@ -186,15 +220,8 @@ public class SampleGenerator
             }
         }
 
-        // Normalize by oscillator count to manage amplitude.
-        // This is intentionally simple; later you can add peak normalization/limiting.
-        float inv = 1.0f / amount;
-
-        for (int s = 0; s < sampleCount; s++)
-        {
-            mixedL[s] *= inv;
-            mixedR[s] *= inv;
-        }
+        // Peak-normalize to -1 dBFS:
+        NormalizePeakToDb(ref mixedL, ref mixedR, -1.0f);
 
         var sample = new Sample();
         sample.Type = type;
@@ -283,6 +310,43 @@ public class SampleGenerator
             return -1.0f;
 
         return v;
+    }
+    
+    private static float DbToLinear(float db)
+    {
+        return MathF.Pow(10.0f, db / 20.0f);
+    }
+
+    private static void NormalizePeakToDb(ref float[] left, ref float[] right, float targetDb)
+    {
+        if (left.Length != right.Length)
+            Debug.Error("[NormalizePeakToDb] Left and right buffers must have identical lengths.");
+
+        float peak = 0.0f;
+
+        for (int i = 0; i < left.Length; i++)
+        {
+            float aL = MathF.Abs(left[i]);
+            float aR = MathF.Abs(right[i]);
+
+            if (aL > peak)
+                peak = aL;
+
+            if (aR > peak)
+                peak = aR;
+        }
+
+        if (peak <= 0.0f)
+            return;
+
+        float targetPeak = DbToLinear(targetDb); // e.g. -1 dB -> 0.8912509...
+        float gain = targetPeak / peak;
+
+        for (int i = 0; i < left.Length; i++)
+        {
+            left[i] *= gain;
+            right[i] *= gain;
+        }
     }
 }
 
