@@ -18,23 +18,39 @@ public class SampleGenerator
         PreComputedWaves.Initialize();
     }
 
-    // Returns left and right channel sample
-    public static (List<float>, List<float>) GenerateSample(SampleType type, float frequency,
-        int sampleRate, int amount, float lengthSeconds, float detune, bool randomDetuneDistro = false)
+    // Returns left and right channel samples
+    public static (List<float> left, List<float> right) GenerateSample(
+        SampleType type,
+        float frequency,
+        int sampleRate,
+        int amount,
+        float lengthSeconds,
+        float detune,
+        bool randomDetuneDistro = false)
     {
         if (sampleRate <= 0)
+        {
             Debug.Error("Sample rate must be positive.");
+            return (new List<float>(), new List<float>());
+        }
 
         if (lengthSeconds <= 0.0f)
+        {
             Debug.Error("Length in seconds must be positive.");
+            return (new List<float>(), new List<float>());
+        }
 
         if (amount <= 0)
+        {
             Debug.Error("Amount must be positive.");
+            return (new List<float>(), new List<float>());
+        }
 
         int sampleCount = (int)MathF.Round(sampleRate * lengthSeconds);
-        
         if (sampleCount <= 0)
+        {
             return (new List<float>(), new List<float>());
+        }
 
         float[] wavetable = type switch
         {
@@ -45,40 +61,87 @@ public class SampleGenerator
             _ => PreComputedWaves.Sine
         };
 
-        // Each oscillator writes to a private buffer to avoid synchronization.
-        float[][] partials = new float[amount][];
+        // Per-oscillator partial buffers to avoid locking in the hot loop.
+        float[][] partialLeft = new float[amount][];
+        float[][] partialRight = new float[amount][];
 
         Parallel.For(
             fromInclusive: 0,
             toExclusive: amount,
             body: i =>
             {
-                float[] local = new float[sampleCount];
+                float[] localL = new float[sampleCount];
+                float[] localR = new float[sampleCount];
 
-                // Detune factor in [-detune, +detune].
-                // Interpreting "detune" as a fractional frequency offset (e.g., 0.01 => +/- 1%).
-                float detuneFactor = 0.0f;
-                if (amount > 1)
+                // Thread-safe randomness: create a per-oscillator Random instance.
+                // Seed is deterministic across runs for a given i (useful for debugging).
+                Random rng = new Random(unchecked(0x2C9277B5 ^ (i * 0x1B873593)));
+
+                // 1) Detune factor (fractional): oscFreq = frequency * (1 + detuneFactor)
+                // detuneFactor in [-detune, +detune]
+                float detuneFactor;
+                if (amount <= 1 || detune == 0.0f)
                 {
-                    float t = (float)i / (amount - 1); // [0, 1]
+                    detuneFactor = 0.0f;
+                }
+                else if (randomDetuneDistro)
+                {
+                    float u = (float)rng.NextDouble();          // [0, 1)
+                    detuneFactor = ((u * 2.0f) - 1.0f) * detune; // [-detune, +detune]
+                }
+                else
+                {
+                    float t = (float)i / (amount - 1);           // [0, 1]
                     detuneFactor = ((t * 2.0f) - 1.0f) * detune; // [-detune, +detune]
                 }
 
                 float oscFreq = frequency * (1.0f + detuneFactor);
 
-                // Phase increment in table-space per sample.
-                // phase is in [0, TableSize) but will wrap naturally via masking in ReadLinear.
-                float phase = 0.0f;
+                // 2) Stereo placement: spread oscillators across the field.
+                // Pan in [-1, +1]; -1 = left, +1 = right
+                float pan;
+                if (amount <= 1)
+                {
+                    pan = 0.0f;
+                }
+                else
+                {
+                    float tPan = (float)i / (amount - 1); // [0, 1]
+                    pan = (tPan * 2.0f) - 1.0f;           // [-1, 1]
+                }
+
+                // Constant-power panning (preserves perceived loudness across pan positions)
+                float angle = (pan + 1.0f) * 0.25f * MathF.PI; // map [-1,1] -> [0, pi/2]
+                float gainL = MathF.Cos(angle);
+                float gainR = MathF.Sin(angle);
+
+                // 3) Random start phase per oscillator (requested).
+                float phase;
+                if (randomDetuneDistro)
+                {
+                    // When randomDetuneDistro is enabled, random phase is expected.
+                    phase = (float)rng.NextDouble() * PreComputedWaves.TableSize;
+                }
+                else
+                {
+                    // Even in "evenly spaced detune" mode, random phase is still beneficial for lushness.
+                    // If you later want deterministic / evenly spaced phase, change this to:
+                    // phase = ((float)i / amount) * PreComputedWaves.TableSize;
+                    phase = (float)rng.NextDouble() * PreComputedWaves.TableSize;
+                }
+
                 float phaseInc = (oscFreq * PreComputedWaves.TableSize) / sampleRate;
 
                 for (int s = 0; s < sampleCount; s++)
                 {
-                    local[s] = PreComputedWaves.ReadLinear(wavetable, phase);
+                    float v = PreComputedWaves.ReadLinear(wavetable, phase);
+
+                    localL[s] = v * gainL;
+                    localR[s] = v * gainR;
 
                     phase += phaseInc;
 
                     // Keep phase bounded to avoid float growth over long renders.
-                    // This is cheaper than a modulo and sufficient for correctness.
                     if (phase >= PreComputedWaves.TableSize)
                     {
                         phase -= PreComputedWaves.TableSize;
@@ -87,34 +150,38 @@ public class SampleGenerator
                             phase = phase % PreComputedWaves.TableSize;
                         }
                     }
-                    else if (phase < 0.0f)
-                    {
-                        phase += PreComputedWaves.TableSize;
-                    }
                 }
 
-                partials[i] = local;
+                partialLeft[i] = localL;
+                partialRight[i] = localR;
             });
 
-        // Sum partial buffers into final output.
-        float[] mixed = new float[sampleCount];
+        // Mixdown
+        float[] mixedL = new float[sampleCount];
+        float[] mixedR = new float[sampleCount];
+
         for (int i = 0; i < amount; i++)
         {
-            float[] local = partials[i];
+            float[] l = partialLeft[i];
+            float[] r = partialRight[i];
+
             for (int s = 0; s < sampleCount; s++)
             {
-                mixed[s] += local[s];
+                mixedL[s] += l[s];
+                mixedR[s] += r[s];
             }
         }
 
-        // Normalize by number of oscillators to keep amplitude roughly consistent.
+        // Normalize to reduce clipping risk.
+        // This is a simple scaling. Later you may prefer: peak normalize, limiter, or soft clip.
         float inv = 1.0f / amount;
         for (int s = 0; s < sampleCount; s++)
         {
-            mixed[s] *= inv;
+            mixedL[s] *= inv;
+            mixedR[s] *= inv;
         }
 
-        return new List<float>(mixed);
+        return (new List<float>(mixedL), new List<float>(mixedR));
     }
 
     public static void SaveSample(List<float> samples, string path)
