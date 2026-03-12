@@ -14,11 +14,12 @@ public class SampleGenerator
 
         if (!Directory.Exists(SamplePath))
             Directory.CreateDirectory(SamplePath);
+        
+        PreComputedWaves.Initialize();
     }
 
-    public static List<float> GenerateSawSample(int ammount, float detune, float lengthSeconds)
+    public static List<float> GenerateSample(SampleType type, int amount, float detune, float lengthSeconds)
     {
-        //
         return new List<float>();
     }
 
@@ -26,4 +27,12 @@ public class SampleGenerator
     {
         
     }
+}
+
+public enum SampleType
+{
+    Sine,
+    Saw,
+    Square,
+    Triangle
 }
