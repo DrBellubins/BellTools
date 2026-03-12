@@ -32,8 +32,8 @@ public class SampleGenerator
         //var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, amount,
         //    10f, 0.006f, true);
 
-        var sample = GenerateOctaveSample(SampleType.Saw, 440f / 12f, 13, 44100, amount,
-            10f, 0.006f, true);
+        var sample = GenerateOctaveSample(SampleType.Saw, 440f / 12f, 13, 
+            OctaveDirection.Up, 44100, amount, 10f, 0.006f, true);
         
         Debug.Log($"Generation done!");
 
@@ -45,6 +45,7 @@ public class SampleGenerator
         SampleType type,
         float frequency,
         int octaves,
+        OctaveDirection octaveDirection,
         int sampleRate,
         int amount,
         float lengthSeconds,
