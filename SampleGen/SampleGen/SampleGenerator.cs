@@ -6,20 +6,31 @@ public class SampleGenerator
     
     public static void Initialize(string[] args)
     {
-        if (string.IsNullOrEmpty(args[0]))
+        /*if (string.IsNullOrEmpty(args[0]))
         {
             Debug.Error("No arguments given!");
             return;
-        }
+        }*/
 
         if (!Directory.Exists(SamplePath))
             Directory.CreateDirectory(SamplePath);
         
         PreComputedWaves.Initialize();
+        
+        Run();
     }
 
+    public static void Run()
+    {
+        var sample = GenerateSample(SampleType.Saw, 440f, 44100, 256,
+            10f, 0.006f);
+
+        string timestamp = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
+        SaveSample(sample, Path.Combine(SamplePath, $"{sample.Type}-{sample.LengthSeconds}-{timestamp}"));
+    }
+    
     // Returns left and right channel samples
-    public static (List<float> left, List<float> right) GenerateSample(
+    public static Sample GenerateSample(
         SampleType type,
         float frequency,
         int sampleRate,
@@ -31,26 +42,25 @@ public class SampleGenerator
         if (sampleRate <= 0)
         {
             Debug.Error("Sample rate must be positive.");
-            return (new List<float>(), new List<float>());
+            return new Sample();
         }
 
         if (lengthSeconds <= 0.0f)
         {
             Debug.Error("Length in seconds must be positive.");
-            return (new List<float>(), new List<float>());
+            return new Sample();
         }
 
         if (amount <= 0)
         {
             Debug.Error("Amount must be positive.");
-            return (new List<float>(), new List<float>());
+            return new Sample();
         }
 
         int sampleCount = (int)MathF.Round(sampleRate * lengthSeconds);
+        
         if (sampleCount <= 0)
-        {
-            return (new List<float>(), new List<float>());
-        }
+            return new Sample();
 
         float[] wavetable = type switch
         {
@@ -97,7 +107,7 @@ public class SampleGenerator
 
                 // Deterministic per-worker RNG; oscillator-level randomness is derived from it.
                 // This avoids sharing RNGs between threads.
-                int seed = unchecked(0x6D2B79F5 ^ (w * 0x85EBCA6B));
+                int seed = unchecked((int)0x6D2B79F5 ^ (w * (int)0x85EBCA6B));
                 Random rng = new Random(seed);
 
                 for (int i = start; i < end; i++)
@@ -186,13 +196,33 @@ public class SampleGenerator
             mixedR[s] *= inv;
         }
 
-        return (new List<float>(mixedL), new List<float>(mixedR));
+        var sample = new Sample();
+        sample.Type = type;
+        sample.SampleRate = sampleRate;
+        sample.Frequency = frequency;
+        sample.Detune = detune;
+        sample.LengthSeconds = lengthSeconds;
+        sample.LeftSamples = new List<float>(mixedL);
+        sample.RightSamples = new List<float>(mixedR);
+
+        return sample;
     }
 
-    public static void SaveSample(List<float> samples, string path)
+    public static void SaveSample(Sample sample, string path)
     {
         // samples.Count is the sample rate!
     }
+}
+
+public struct Sample()
+{
+    public SampleType Type;
+    public int SampleRate;
+    public float Frequency;
+    public float Detune;
+    public float LengthSeconds;
+    public List<float> LeftSamples;
+    public List<float> RightSamples;
 }
 
 public enum SampleType
