@@ -26,17 +26,16 @@ public class SampleGenerator
 
     public static void Run()
     {
-        timer.Restart();
-
         //int amount = 16384;
         int amount = 256;
         
-        var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, amount,
+        //var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, amount,
+        //    10f, 0.006f, true);
+
+        var sample = GenerateOctaveSample(SampleType.Saw, 440f / 12f, 13, 44100, amount,
             10f, 0.006f, true);
         
-        timer.Stop();
-        
-        Debug.Log($"Finished generation! Elapsed: {timer.ElapsedMilliseconds}ms");
+        Debug.Log($"Generation done!");
 
         string timestamp = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
         SaveSample(sample, Path.Combine(SamplePath, $"{sample.Type}-{sample.LengthSeconds}-{timestamp}"));
@@ -52,15 +51,118 @@ public class SampleGenerator
         float detune,
         bool randomDetuneDistro = false)
     {
-        Sample sample = new Sample();
-
-        for (int i = 0; i < octaves; i++)
+        if (octaves <= 0)
         {
-            var outputSample = GenerateSample(type, frequency, sampleRate, amount,
-                lengthSeconds, detune, randomDetuneDistro);
+            Debug.Error("[GenerateOctaveSample] Octaves must be positive.");
+            return new Sample();
         }
-        
-        return sample;
+    
+        int downCount = (octaves - 1) / 2;
+        int upCount = (octaves - 1) - downCount;
+    
+        int[] octaveOffsets = new int[octaves];
+        int idx = 0;
+    
+        // Always include the nominal octave.
+        octaveOffsets[idx++] = 0;
+    
+        int d = 0;
+        int u = 0;
+        int step = 1;
+    
+        // Interleave down/up offsets for a sensible spectral distribution.
+        while (idx < octaveOffsets.Length)
+        {
+            if (d < downCount)
+            {
+                octaveOffsets[idx++] = -step;
+                d++;
+                
+                if (idx >= octaveOffsets.Length)
+                    break;
+            }
+    
+            if (u < upCount)
+            {
+                octaveOffsets[idx++] = step;
+                u++;
+                if (idx >= octaveOffsets.Length)
+                    break;
+            }
+    
+            step++;
+        }
+    
+        Sample? first = null;
+        float[]? mixedL = null;
+        float[]? mixedR = null;
+    
+        float layerGain = 1.0f / octaves;
+    
+        for (int i = 0; i < octaveOffsets.Length; i++)
+        {
+            int offset = octaveOffsets[i];
+    
+            // Frequency scaling by octaves: f * 2^(offset)
+            float octaveFrequency = frequency * MathF.Pow(2.0f, offset);
+    
+            timer.Restart();
+            
+            Sample layer = GenerateSample(type, octaveFrequency, sampleRate, amount,
+                lengthSeconds, detune, randomDetuneDistro);
+            
+            timer.Stop();
+            
+            Debug.Log($"Octave generation {i} done! Elapsed: {timer.ElapsedMilliseconds}ms");
+    
+            if (layer.LeftSamples == null || layer.RightSamples == null)
+            {
+                Debug.Error("[GenerateOctaveSample] Generated layer has null channels.");
+                return new Sample();
+            }
+    
+            if (layer.LeftSamples.Count != layer.RightSamples.Count)
+            {
+                Debug.Error("[GenerateOctaveSample] Generated layer channels differ in length.");
+                return new Sample();
+            }
+    
+            if (first == null)
+            {
+                first = layer;
+    
+                mixedL = new float[layer.LeftSamples.Count];
+                mixedR = new float[layer.RightSamples.Count];
+            }
+            else
+            {
+                if (layer.LeftSamples.Count != mixedL!.Length || layer.RightSamples.Count != mixedR!.Length)
+                {
+                    Debug.Error("[GenerateOctaveSample] Layer length mismatch; cannot mix.");
+                    return new Sample();
+                }
+            }
+    
+            for (int s = 0; s < mixedL!.Length; s++)
+            {
+                mixedL[s] += layer.LeftSamples[s] * layerGain;
+                mixedR[s] += layer.RightSamples[s] * layerGain;
+            }
+        }
+    
+        // Final safety normalization (keeps consistent max peak).
+        NormalizePeakToDb(ref mixedL!, ref mixedR!, -1.0f);
+    
+        Sample output = new Sample();
+        output.Type = type;
+        output.SampleRate = sampleRate;
+        output.Frequency = frequency;
+        output.Detune = detune;
+        output.LengthSeconds = lengthSeconds;
+        output.LeftSamples = new List<float>(mixedL!);
+        output.RightSamples = new List<float>(mixedR!);
+    
+        return output;
     }
     
     // Returns left and right channel samples
@@ -367,4 +469,11 @@ public enum SampleType
     Saw,
     Square,
     Triangle
+}
+
+public enum OctaveDirection
+{
+    Both,
+    Up,
+    Down
 }
