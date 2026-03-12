@@ -56,7 +56,7 @@ public class SampleGenerator
 
         for (int i = 0; i < octaves; i++)
         {
-            var outputSample = GenerateSample(SampleType.Saw, frequency, sampleRate, amount,
+            var outputSample = GenerateSample(type, frequency, sampleRate, amount,
                 lengthSeconds, detune, randomDetuneDistro);
         }
         
