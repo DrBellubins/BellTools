@@ -1,0 +1,1 @@
+I'm trying to develop a simple tool that generates .wav files of synth sounds of various wave types (sin, saw, square, triangle waves) at a given length, with a given amount. What I want it to do is have it generate 100s, potentially millions of detuned waves using multi-threaded pools. It then combines all of them, and saves then to a .wav file.
