@@ -97,7 +97,8 @@ public class SampleGenerator
 
                 // Deterministic per-worker RNG; oscillator-level randomness is derived from it.
                 // This avoids sharing RNGs between threads.
-                Random rng = new Random(unchecked(0x6D2B79F5 ^ (w * 0x85EBCA6B)));
+                int seed = unchecked(0x6D2B79F5 ^ (w * 0x85EBCA6B));
+                Random rng = new Random(seed);
 
                 for (int i = start; i < end; i++)
                 {
