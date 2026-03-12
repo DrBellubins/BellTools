@@ -42,7 +42,7 @@ public class SampleGenerator
         SaveSample(sample, Path.Combine(SamplePath, $"{sample.Type}-{sample.LengthSeconds}-{timestamp}"));
     }
 
-    public Sample GenerateOctaveSample(
+    public static Sample GenerateOctaveSample(
         SampleType type,
         float frequency,
         int octaves,
