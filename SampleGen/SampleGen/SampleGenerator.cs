@@ -18,14 +18,15 @@ public class SampleGenerator
         PreComputedWaves.Initialize();
     }
 
-    public static List<float> GenerateSample(SampleType type, int amount, float detune, float lengthSeconds)
+    public static List<float> GenerateSample(SampleType type, int sampleRate,
+        int amount, float detune, float lengthSeconds)
     {
         return new List<float>();
     }
 
     public static void SaveSample(List<float> samples, string path)
     {
-        
+        // samples.Count is the sample rate!
     }
 }
 
