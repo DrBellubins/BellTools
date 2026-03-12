@@ -7,6 +7,6 @@ class Program
         Console.WriteLine("Hello, World!");
         SampleGenerator.Initialize(args);
 
-        Console.ReadLine();
+        //Console.ReadLine();
     }
 }

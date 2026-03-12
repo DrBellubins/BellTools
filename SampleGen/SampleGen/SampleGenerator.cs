@@ -22,8 +22,8 @@ public class SampleGenerator
 
     public static void Run()
     {
-        var sample = GenerateSample(SampleType.Saw, 440f, 44100, 256,
-            10f, 0.006f);
+        var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, 16384,
+            10f, 0.006f, true);
 
         string timestamp = DateTime.Now.ToString("yyyy-MM-dd-HH-mm-ss");
         SaveSample(sample, Path.Combine(SamplePath, $"{sample.Type}-{sample.LengthSeconds}-{timestamp}"));
@@ -41,19 +41,19 @@ public class SampleGenerator
     {
         if (sampleRate <= 0)
         {
-            Debug.Error("Sample rate must be positive.");
+            Debug.Error("[GenerateSample] Sample rate must be positive.");
             return new Sample();
         }
 
         if (lengthSeconds <= 0.0f)
         {
-            Debug.Error("Length in seconds must be positive.");
+            Debug.Error("[GenerateSample] Length in seconds must be positive.");
             return new Sample();
         }
 
         if (amount <= 0)
         {
-            Debug.Error("Amount must be positive.");
+            Debug.Error("[GenerateSample] Amount must be positive.");
             return new Sample();
         }
 
@@ -210,7 +210,79 @@ public class SampleGenerator
 
     public static void SaveSample(Sample sample, string path)
     {
-        // samples.Count is the sample rate!
+        if (sample.LeftSamples == null || sample.RightSamples == null)
+            Debug.Error("[SaveSample] Sample channels must not be null.");
+
+        if (sample.LeftSamples.Count != sample.RightSamples.Count)
+            Debug.Error("[SaveSample] LeftSamples and RightSamples must have identical lengths.");
+
+        if (sample.SampleRate <= 0)
+            Debug.Error("[SaveSample] SampleRate must be a positive integer.");
+
+        string? dir = Path.GetDirectoryName(path);
+        
+        if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        const short audioFormatIeeeFloat = 3;
+        const short numChannels = 2;
+        const short bitsPerSample = 32;
+        const short blockAlign = (short)(numChannels * (bitsPerSample / 8));
+        int byteRate = sample.SampleRate * blockAlign;
+
+        int frames = sample.LeftSamples.Count;
+        int dataSize = frames * blockAlign;
+
+        // RIFF chunk size excludes the first 8 bytes ("RIFF" + uint32 size).
+        int riffChunkSize = 4 /*WAVE*/ + (8 + 16) /*fmt*/ + (8 + dataSize) /*data*/;
+
+        using FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        using BinaryWriter bw = new BinaryWriter(fs);
+
+        // RIFF header
+        bw.Write("RIFF"u8.ToArray());
+        bw.Write(riffChunkSize);
+        bw.Write("WAVE"u8.ToArray());
+
+        // fmt chunk (PCM-style header, but with format tag 3 for IEEE float)
+        bw.Write("fmt "u8.ToArray());
+        bw.Write(16); // PCM/IEEE float fmt chunk size
+        bw.Write(audioFormatIeeeFloat);
+        bw.Write(numChannels);
+        bw.Write(sample.SampleRate);
+        bw.Write(byteRate);
+        bw.Write(blockAlign);
+        bw.Write(bitsPerSample);
+
+        // data chunk
+        bw.Write("data"u8.ToArray());
+        bw.Write(dataSize);
+
+        for (int i = 0; i < frames; i++)
+        {
+            float l = SanitizeFloatSample(sample.LeftSamples[i]);
+            float r = SanitizeFloatSample(sample.RightSamples[i]);
+
+            bw.Write(l);
+            bw.Write(r);
+        }
+        
+        Debug.Log($"Sample saved! '{path}', SampleRate: {sample.SampleRate}, Length: {sample.LengthSeconds}");
+    }
+
+    private static float SanitizeFloatSample(float v)
+    {
+        if (float.IsNaN(v) || float.IsInfinity(v))
+            return 0.0f;
+
+        // Optional safety clamp. If you want to preserve values outside [-1,1], remove this.
+        if (v > 1.0f)
+            return 1.0f;
+
+        if (v < -1.0f)
+            return -1.0f;
+
+        return v;
     }
 }
 
