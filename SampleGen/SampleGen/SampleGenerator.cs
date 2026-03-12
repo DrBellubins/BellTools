@@ -32,7 +32,7 @@ public class SampleGenerator
         //var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, amount,
         //    10f, 0.006f, true);
 
-        var sample = GenerateOctaveSample(SampleType.Saw, 440f / 12f, 13, 
+        var sample = GenerateOctaveSample(SampleType.Saw, 440f / 12f, 4, 
             OctaveDirection.Up, 44100, amount, 10f, 0.006f, true);
         
         Debug.Log($"Generation done!");
@@ -58,46 +58,76 @@ public class SampleGenerator
             return new Sample();
         }
     
-        int downCount = (octaves - 1) / 2;
-        int upCount = (octaves - 1) - downCount;
-    
         int[] octaveOffsets = new int[octaves];
-        int idx = 0;
     
         // Always include the nominal octave.
-        octaveOffsets[idx++] = 0;
+        octaveOffsets[0] = 0;
     
-        int d = 0;
-        int u = 0;
-        int step = 1;
-    
-        // Interleave down/up offsets for a sensible spectral distribution.
-        while (idx < octaveOffsets.Length)
+        if (octaves > 1)
         {
-            if (d < downCount)
+            switch (octaveDirection)
             {
-                octaveOffsets[idx++] = -step;
-                d++;
-                
-                if (idx >= octaveOffsets.Length)
-                    break;
-            }
+                case OctaveDirection.Up:
+                {
+                    for (int i = 1; i < octaves; i++)
+                        octaveOffsets[i] = i; // +1, +2, +3...
     
-            if (u < upCount)
-            {
-                octaveOffsets[idx++] = step;
-                u++;
-                if (idx >= octaveOffsets.Length)
                     break;
-            }
+                }
     
-            step++;
+                case OctaveDirection.Down:
+                {
+                    for (int i = 1; i < octaves; i++)
+                        octaveOffsets[i] = -i; // -1, -2, -3...
+    
+                    break;
+                }
+    
+                case OctaveDirection.Both:
+                default:
+                {
+                    int downCount = (octaves - 1) / 2;
+                    int upCount = (octaves - 1) - downCount;
+    
+                    int idx = 1;
+                    int d = 0;
+                    int u = 0;
+                    int step = 1;
+    
+                    // Interleave down/up offsets: -1, +1, -2, +2, ...
+                    while (idx < octaveOffsets.Length)
+                    {
+                        if (d < downCount)
+                        {
+                            octaveOffsets[idx++] = -step;
+                            d++;
+    
+                            if (idx >= octaveOffsets.Length)
+                                break;
+                        }
+    
+                        if (u < upCount)
+                        {
+                            octaveOffsets[idx++] = step;
+                            u++;
+    
+                            if (idx >= octaveOffsets.Length)
+                                break;
+                        }
+    
+                        step++;
+                    }
+    
+                    break;
+                }
+            }
         }
     
         Sample? first = null;
         float[]? mixedL = null;
         float[]? mixedR = null;
     
+        // Equal-weight mix so adding layers does not increase overall amplitude.
         float layerGain = 1.0f / octaves;
     
         for (int i = 0; i < octaveOffsets.Length; i++)
@@ -108,12 +138,18 @@ public class SampleGenerator
             float octaveFrequency = frequency * MathF.Pow(2.0f, offset);
     
             timer.Restart();
-            
-            Sample layer = GenerateSample(type, octaveFrequency, sampleRate, amount,
-                lengthSeconds, detune, randomDetuneDistro);
-            
+    
+            Sample layer = GenerateSample(
+                type,
+                octaveFrequency,
+                sampleRate,
+                amount,
+                lengthSeconds,
+                detune,
+                randomDetuneDistro);
+    
             timer.Stop();
-            
+    
             Debug.Log($"Octave generation {i} done! Elapsed: {timer.ElapsedMilliseconds}ms");
     
             if (layer.LeftSamples == null || layer.RightSamples == null)
