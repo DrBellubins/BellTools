@@ -349,9 +349,7 @@ public class SampleGenerator
                             phase -= PreComputedWaves.TableSize;
     
                             if (phase >= PreComputedWaves.TableSize)
-                            {
                                 phase = phase % PreComputedWaves.TableSize;
-                            }
                         }
                     }
                 }
