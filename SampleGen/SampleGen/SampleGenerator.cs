@@ -27,13 +27,14 @@ public class SampleGenerator
     public static void Run()
     {
         //int amount = 16384;
-        int amount = 256;
+        int amount = 512;
         
         //var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, amount,
         //    10f, 0.006f, true);
 
-        var sample = GenerateOctaveSample(SampleType.Saw, 440f / 12f, 4, 
-            OctaveDirection.Up, 44100, amount, 10f, 0.006f, true);
+        var sample = GenerateOctaveSample(SampleType.Square, 440f / 12f, 4, 
+            OctaveDirection.Up, 44100, amount, 10f, 0.000f, 
+            100.5f, 40f, true);
         
         Debug.Log($"Generation done!");
 
@@ -50,6 +51,8 @@ public class SampleGenerator
         int amount,
         float lengthSeconds,
         float detune,
+        float perlinDetune = 0.06f,
+        float perlinFrequency = 40f,
         bool randomDetuneDistro = false)
     {
         if (octaves <= 0)
@@ -146,6 +149,8 @@ public class SampleGenerator
                 amount,
                 lengthSeconds,
                 detune,
+                perlinDetune,
+                perlinFrequency,
                 randomDetuneDistro);
     
             timer.Stop();
@@ -210,6 +215,8 @@ public class SampleGenerator
         int amount,
         float lengthSeconds,
         float detune,
+        float perlinDetune,
+        float perlinFrequency,
         bool randomDetuneDistro = false)
     {
         if (sampleRate <= 0)
@@ -217,24 +224,24 @@ public class SampleGenerator
             Debug.Error("[GenerateSample] Sample rate must be positive.");
             return new Sample();
         }
-
+    
         if (lengthSeconds <= 0.0f)
         {
             Debug.Error("[GenerateSample] Length in seconds must be positive.");
             return new Sample();
         }
-
+    
         if (amount <= 0)
         {
             Debug.Error("[GenerateSample] Amount must be positive.");
             return new Sample();
         }
-
+    
         int sampleCount = (int)MathF.Round(sampleRate * lengthSeconds);
-        
+    
         if (sampleCount <= 0)
             return new Sample();
-
+    
         float[] wavetable = type switch
         {
             SampleType.Sine => PreComputedWaves.Sine,
@@ -243,29 +250,24 @@ public class SampleGenerator
             SampleType.Triangle => PreComputedWaves.Triangle,
             _ => PreComputedWaves.Sine
         };
-
-        // Final mix buffers
+    
         float[] mixedL = new float[sampleCount];
         float[] mixedR = new float[sampleCount];
-
-        // Choose worker count automatically.
-        // For very large oscillator counts this is appropriate; for tiny counts we clamp.
+    
         int workerCount = Math.Min(Math.Max(1, Environment.ProcessorCount), amount);
-
-        // Thread-local accumulation buffers: O(workerCount * sampleCount) memory.
+    
         float[][] workerSumL = new float[workerCount][];
         float[][] workerSumR = new float[workerCount][];
-
+    
         for (int w = 0; w < workerCount; w++)
         {
             workerSumL[w] = new float[sampleCount];
             workerSumR[w] = new float[sampleCount];
         }
-
-        // Partition oscillators across workers: [start, end)
+    
         int baseCount = amount / workerCount;
         int remainder = amount % workerCount;
-
+    
         Parallel.For(
             fromInclusive: 0,
             toExclusive: workerCount,
@@ -274,69 +276,78 @@ public class SampleGenerator
                 int start = w * baseCount + Math.Min(w, remainder);
                 int count = baseCount + (w < remainder ? 1 : 0);
                 int end = start + count;
-
+    
                 float[] sumL = workerSumL[w];
                 float[] sumR = workerSumR[w];
-
-                // Deterministic per-worker RNG; oscillator-level randomness is derived from it.
-                // This avoids sharing RNGs between threads.
+    
                 int seed = unchecked((int)0x6D2B79F5 ^ (w * (int)0x85EBCA6B));
                 Random rng = new Random(seed);
-
+    
                 for (int i = start; i < end; i++)
                 {
-                    // DETUNE (fractional frequency)
-                    // detuneFactor in [-detune, +detune], applied as oscFreq = frequency * (1 + detuneFactor)
                     float detuneFactor = 0.0f;
-
+    
                     if (amount > 1 && detune != 0.0f)
                     {
                         if (randomDetuneDistro)
                         {
-                            float u = (float)rng.NextDouble();           // [0, 1)
-                            detuneFactor = ((u * 2.0f) - 1.0f) * detune; // [-detune, +detune]
+                            float u = (float)rng.NextDouble();
+                            detuneFactor = ((u * 2.0f) - 1.0f) * detune;
                         }
                         else
                         {
-                            float t = (float)i / (amount - 1);           // [0, 1]
-                            detuneFactor = ((t * 2.0f) - 1.0f) * detune; // [-detune, +detune]
+                            float t = (float)i / (amount - 1);
+                            detuneFactor = ((t * 2.0f) - 1.0f) * detune;
                         }
                     }
-
-                    float oscFreq = frequency * (1.0f + detuneFactor);
+    
+                    // Perlin detune contribution (in addition to detuneFactor)
+                    float perlinDetuneFactor = 0.0f;
+    
+                    if (amount > 1 && perlinDetune != 0.0f)
+                    {
+                        //float perlinPhase = perlinFrequency + ((float)i / amount);
+                        float perlinPhase = perlinFrequency;
+    
+                        // Use a deterministic seed; reusing the per-worker seed is acceptable,
+                        // but you may prefer a separate constant-mixed seed to decouple it from RNG.
+                        float perlinValue = Utils.Perlin1DNoise(perlinPhase, seed);
+    
+                        // perlinValue ~ [-1,1], so this becomes ~ [-perlinDetune, +perlinDetune]
+                        perlinDetuneFactor = perlinValue * perlinDetune;
+                    }
+    
+                    float totalDetuneFactor = detuneFactor + perlinDetuneFactor;
+    
+                    float oscFreq = frequency * (1.0f + totalDetuneFactor);
                     float phaseInc = (oscFreq * PreComputedWaves.TableSize) / sampleRate;
-
-                    // RANDOM START PHASE (per oscillator)
+    
                     float phase = (float)rng.NextDouble() * PreComputedWaves.TableSize;
-
-                    // STEREO: constant-power pan spread across ensemble
-                    // If you later want *random* panning when randomDetuneDistro is true, we can add it.
+    
                     float pan = 0.0f;
                     if (amount > 1)
                     {
-                        float tPan = (float)i / (amount - 1); // [0, 1]
-                        pan = (tPan * 2.0f) - 1.0f;           // [-1, 1]
+                        float tPan = (float)i / (amount - 1);
+                        pan = (tPan * 2.0f) - 1.0f;
                     }
-
-                    float angle = (pan + 1.0f) * 0.25f * MathF.PI; // [-1,1] -> [0, pi/2]
+    
+                    float angle = (pan + 1.0f) * 0.25f * MathF.PI;
                     float gainL = MathF.Cos(angle);
                     float gainR = MathF.Sin(angle);
-
-                    // Generate and accumulate directly into the worker buffers
+    
                     for (int s = 0; s < sampleCount; s++)
                     {
                         float v = PreComputedWaves.ReadLinear(wavetable, phase);
-
+    
                         sumL[s] += v * gainL;
                         sumR[s] += v * gainR;
-
+    
                         phase += phaseInc;
-
-                        // Keep phase bounded (cheap and sufficient)
+    
                         if (phase >= PreComputedWaves.TableSize)
                         {
                             phase -= PreComputedWaves.TableSize;
-
+    
                             if (phase >= PreComputedWaves.TableSize)
                             {
                                 phase = phase % PreComputedWaves.TableSize;
@@ -345,23 +356,21 @@ public class SampleGenerator
                     }
                 }
             });
-
-        // Reduce worker buffers into final buffers
+    
         for (int w = 0; w < workerCount; w++)
         {
             float[] sumL = workerSumL[w];
             float[] sumR = workerSumR[w];
-
+    
             for (int s = 0; s < sampleCount; s++)
             {
                 mixedL[s] += sumL[s];
                 mixedR[s] += sumR[s];
             }
         }
-
-        // Peak-normalize to -1 dBFS:
+    
         NormalizePeakToDb(ref mixedL, ref mixedR, -1.0f);
-
+    
         var sample = new Sample();
         sample.Type = type;
         sample.SampleRate = sampleRate;
@@ -370,7 +379,7 @@ public class SampleGenerator
         sample.LengthSeconds = lengthSeconds;
         sample.LeftSamples = new List<float>(mixedL);
         sample.RightSamples = new List<float>(mixedR);
-
+    
         return sample;
     }
 
