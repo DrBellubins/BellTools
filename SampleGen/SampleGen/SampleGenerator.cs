@@ -32,9 +32,9 @@ public class SampleGenerator
         //var sample = GenerateSample(SampleType.Saw, 440f / 12f, 44100, amount,
         //    10f, 0.006f, true);
 
-        var sample = GenerateOctaveSample(SampleType.Square, 440f / 12f, 4, 
-            OctaveDirection.Up, 44100, amount, 10f, 0.000f, 
-            100.5f, 40f, true);
+        var sample = GenerateOctaveSample(SampleType.Saw, 440f / 12f, 4, 
+            OctaveDirection.Up, 44100, amount, 10f, 0.002f, 
+            0.04f, 7f, true);
         
         Debug.Log($"Generation done!");
 
@@ -280,11 +280,13 @@ public class SampleGenerator
                 float[] sumL = workerSumL[w];
                 float[] sumR = workerSumR[w];
     
+                // Per-worker deterministic seed.
                 int seed = unchecked((int)0x6D2B79F5 ^ (w * (int)0x85EBCA6B));
                 Random rng = new Random(seed);
     
                 for (int i = start; i < end; i++)
                 {
+                    // Existing detune distribution (static per oscillator).
                     float detuneFactor = 0.0f;
     
                     if (amount > 1 && detune != 0.0f)
@@ -301,30 +303,15 @@ public class SampleGenerator
                         }
                     }
     
-                    // Perlin detune contribution (in addition to detuneFactor)
-                    float perlinDetuneFactor = 0.0f;
+                    // Base oscillator frequency including the existing (static) detune.
+                    float baseOscFreq = frequency * (1.0f + detuneFactor);
     
-                    if (amount > 1 && perlinDetune != 0.0f)
-                    {
-                        //float perlinPhase = perlinFrequency + ((float)i / amount);
-                        float perlinPhase = perlinFrequency;
-    
-                        // Use a deterministic seed; reusing the per-worker seed is acceptable,
-                        // but you may prefer a separate constant-mixed seed to decouple it from RNG.
-                        float perlinValue = Utils.Perlin1DNoise(perlinPhase, seed);
-    
-                        // perlinValue ~ [-1,1], so this becomes ~ [-perlinDetune, +perlinDetune]
-                        perlinDetuneFactor = perlinValue * perlinDetune;
-                    }
-    
-                    float totalDetuneFactor = detuneFactor + perlinDetuneFactor;
-    
-                    float oscFreq = frequency * (1.0f + totalDetuneFactor);
-                    float phaseInc = (oscFreq * PreComputedWaves.TableSize) / sampleRate;
-    
+                    // Initial oscillator phase (randomized).
                     float phase = (float)rng.NextDouble() * PreComputedWaves.TableSize;
     
+                    // Per-oscillator panning.
                     float pan = 0.0f;
+    
                     if (amount > 1)
                     {
                         float tPan = (float)i / (amount - 1);
@@ -335,8 +322,36 @@ public class SampleGenerator
                     float gainL = MathF.Cos(angle);
                     float gainR = MathF.Sin(angle);
     
+                    // Per-oscillator Perlin index offset, as requested:
+                    // phase offset = (oscillator index / oscillator count)
+                    //
+                    // Note: divisor is 'amount' (not amount-1) to preserve [0, 1) range.
+                    float perlinIndexOffset = (amount > 0) ? ((float)i / amount) : 0.0f;
+    
                     for (int s = 0; s < sampleCount; s++)
                     {
+                        float oscFreq = baseOscFreq;
+    
+                        if (perlinDetune != 0.0f && perlinFrequency != 0.0f)
+                        {
+                            // Time in seconds for this sample.
+                            float timeSeconds = (float)s / sampleRate;
+    
+                            // perlinFrequency is in Hz, so the Perlin coordinate advances at perlinFrequency units per second.
+                            // Adding perlinIndexOffset spreads the oscillators across the noise field while remaining time-correlated.
+                            float perlinPhase = (perlinFrequency * timeSeconds) + (perlinIndexOffset * 7f);
+    
+                            float perlinValue = Utils.Perlin1DNoise(perlinPhase, seed);
+    
+                            // perlinValue is approximately in [-1, 1], so this factor is approximately [-perlinDetune, +perlinDetune].
+                            float perlinDetuneFactor = perlinValue * perlinDetune;
+    
+                            // Apply Perlin modulation on top of the existing static detune.
+                            oscFreq = baseOscFreq * (1.0f + perlinDetuneFactor);
+                        }
+    
+                        float phaseInc = (oscFreq * PreComputedWaves.TableSize) / sampleRate;
+    
                         float v = PreComputedWaves.ReadLinear(wavetable, phase);
     
                         sumL[s] += v * gainL;
